@@ -1,0 +1,66 @@
+#!/bin/bash
+
+set -e
+
+emulator=${1-aplite}
+output_dir="build/screenshots/${emulator}"
+pause_secs=2
+src_file="src/main.c"
+tmp_dir=$(mktemp -d)
+
+if ! which pebble >/dev/null; then
+	echo "Ensure that the Pebble SDK is installed and that its bin directory is on your \$PATH" >&2
+	exit 1
+fi
+
+capture_screenshot() {
+	local name=$1
+	pebble screenshot --emulator ${emulator} --no-open "${output_dir}/${name}.png"
+}
+
+create_animated_gifs() {
+	pushd "${output_dir}" >/dev/null
+	convert -loop 0 $(echo {100..1} | sed 's/ /.png /g').png -delay 100 0.png disconnected.png animation.gif
+	convert -loop 0 -delay 100 100.png 50.png disconnected.png animation-3frames.gif
+	convert -loop 0 -delay 100 100.png 50.png 0.png disconnected.png animation-4frames.gif
+	convert -loop 0 -delay 100 100.png 67.png 34.png 0.png disconnected.png animation-5frames.gif
+	popd >/dev/null
+}
+
+restore_src() {
+	cp "${tmp_dir}/backup" "${src_file}"
+}
+
+set_battery() {
+	local pct=$1
+	# `emu-battery` has a resolution of 10%, which is insufficient,
+	# so modify the src and re-build instead.
+	# pebble emu-battery --percent ${pct} --emulator ${emulator}"
+	sed -ie "s/s_charge_percentage = .*/s_charge_percentage = ${pct};/g" "${src_file}"
+	make install-${emulator} >/dev/null 2>&1
+	sleep ${pause_secs}
+}
+
+set_disconnected() {
+	sed -ie "s/s_is_connected = .*/s_is_connected = false;/g" "${src_file}"
+	make install-${emulator} >/dev/null 2>&1
+	sleep ${pause_secs}
+}
+
+cp "${src_file}" "${tmp_dir}/backup"
+trap restore_src INT TERM EXIT
+
+mkdir -p "${output_dir}"
+pkill qemu-pebble || true
+
+for pct in {100..0}; do
+	set_battery ${pct}
+	capture_screenshot ${pct}
+done
+
+set_disconnected
+capture_screenshot disconnected
+
+restore_src
+create_animated_gifs
+pkill qemu-pebble || true
